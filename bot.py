@@ -48,7 +48,7 @@ RANK_TIERS: Dict[str, List[str]] = {
 CATEGORY_ROLES = list(RANK_TIERS.keys())
 ALL_STAFF_RANKS = [rank for ranks in RANK_TIERS.values() for rank in ranks]
 ALL_ADMIN_RELATED_ROLES = ALL_STAFF_RANKS + CATEGORY_ROLES
-VACATION_ROLE = "Vacation"
+VACATION_ROLE = "Vacation | إجازة"
 
 BASE_LEVEL_MESSAGES = 100
 LEVEL_GROWTH_FACTOR = 1.15
