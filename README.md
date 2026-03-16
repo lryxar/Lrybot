@@ -1,16 +1,16 @@
 # Discord Staff Bot
 
-بوت متكامل لإدارة فريق الإدارة + أنظمة تفاعل للأعضاء (عملة ALR Coins + نظام لفل).
+بوت لإدارة فريق الإدارة في السيرفر مع أنظمة: التوظيف، الترقية، التقييم، الإجازات، الحضور، الإحصائيات، والـ Logs.
 
 ## التشغيل
 
-1. تثبيت المتطلبات:
+1. ثبّت المتطلبات:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. إنشاء ملف `.env`:
+2. أنشئ ملف `.env`:
 
 ```env
 DISCORD_TOKEN=YOUR_TOKEN
@@ -19,13 +19,13 @@ LOG_CHANNEL_NAME=bot-logs
 STAFF_MANAGER_ROLE=Staff Manager
 ```
 
-3. تشغيل البوت:
+3. شغّل البوت:
 
 ```bash
 python bot.py
 ```
 
-## أوامر الإدارة
+## الأوامر
 
 - `!توظيف @user`
 - `!ترقية @user [steps]`
@@ -36,37 +36,69 @@ python bot.py
 - `!تسجيل`
 - `!خروج`
 - `!say <message>`
-
-## أوامر سلاش
-
-- `/rate`
 - `/stats`
-- `/profile`
-- `/top_alr`
-- `/love person1 person2`
+- `/rate @staff`
+- `/love person1 person2` (يدعم منشن / ID / username)
 
-## نظام ALR Coins + Level
+## ترتيب الرتب والفئات
 
-- كل عضو يحصل على ALR Coins من التفاعل (الرسائل المؤهلة).
-- كل رسالة مؤهلة تعطي XP.
-- المستوى الأول يحتاج 100 رسالة.
-- كل مستوى جديد أصعب بنسبة 15%.
-- رتب المستوى:
-  - Level 10
-  - Level 20
-  - Level 30
-  - Level 40
-  - Level 50
-  - Level 60
-  - Level 70
-  - عند لفل 80: `Great Member` (بدل Level 80)
+- STAFF:
+  - Trial Staff
+  - Trainee
+  - Helper
+  - Visor
+  - Senior
+  - Moderator
+  - Senior Moderator
+  - Head Moderator
+- MIDDLE STAFF:
+  - designer
+  - Agon
+  - Advisor
+  - Developer
+- HIGHER MANAGEMENT:
+  - Co Manager
+  - Manager
+  - Co Leader
+  - Leader
+- OWNER:
+  - RIGHT HAND
+  - LEFT HAND
 
 ## ملاحظات مهمة
 
-- رتب الفئات (`STAFF`, `MIDDLE STAFF`, `HIGHER MANAGEMENT`, `OWNER`) لا تُحذف في الترقية/التنزيل العادي، ويتم إضافتها تلقائياً حسب الرتبة.
-- بيانات التخزين موجودة في `data/`:
-  - `ratings.json`
-  - `vacations.json`
-  - `attendance.json`
-  - `stats.json`
-  - `economy.json`
+- رتب الفئات (`STAFF`, `MIDDLE STAFF`, `HIGHER MANAGEMENT`, `OWNER`) لا تُحذف في الترقية/التنزيل العادي، وتُضاف تلقائياً عند الانتقال لفئة أعلى.
+- كل البيانات محفوظة في ملفات JSON داخل `data/`.
+- يجب أن تكون الرتب في السيرفر مطابقة للأسماء المعرّفة في `bot.py`.
+
+
+## لوحة تحكم (Dashboard)
+
+تمت إضافة لوحة تحكم ويب للعمل من Termux وتشمل إدارة البوت:
+
+- عرض الإحصائيات (ratings / vacations / attendance / stats).
+- إرسال أوامر إدارية مباشرة للبوت (توظيف / ترقية / تنزيل / ترقية-فئة / فصل / إجازة) عبر Queue.
+- البوت ينفذ أوامر الـ Dashboard تلقائياً كل عدة ثواني.
+
+### تشغيل اللوحة
+
+1. أضف في `.env`:
+
+```env
+DASHBOARD_TOKEN=YOUR_SECRET_TOKEN
+DASHBOARD_PORT=8080
+```
+
+2. شغّل اللوحة:
+
+```bash
+python dashboard.py
+```
+
+3. افتح من المتصفح:
+
+```
+http://127.0.0.1:8080/?token=YOUR_SECRET_TOKEN
+```
+
+> ملاحظة: يجب أن يكون `bot.py` شغال بنفس الوقت حتى ينفذ الأوامر المرسلة من اللوحة.

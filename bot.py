@@ -22,13 +22,14 @@ RATINGS_FILE = DATA_DIR / "ratings.json"
 VACATIONS_FILE = DATA_DIR / "vacations.json"
 ATTENDANCE_FILE = DATA_DIR / "attendance.json"
 STATS_FILE = DATA_DIR / "stats.json"
-ECONOMY_FILE = DATA_DIR / "economy.json"
+ACTIONS_FILE = DATA_DIR / "dashboard_actions.json"
 
 LOG_CHANNEL_NAME = os.getenv("LOG_CHANNEL_NAME", "bot-logs")
 STAFF_MANAGER_ROLE = os.getenv("STAFF_MANAGER_ROLE", "Staff Manager")
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 TOKEN = os.getenv("DISCORD_TOKEN", "")
 
+# نفس الترتيب الذي أرسله المستخدم
 RANK_TIERS: Dict[str, List[str]] = {
     "STAFF": [
         "Trial Staff",
@@ -48,13 +49,7 @@ RANK_TIERS: Dict[str, List[str]] = {
 CATEGORY_ROLES = list(RANK_TIERS.keys())
 ALL_STAFF_RANKS = [rank for ranks in RANK_TIERS.values() for rank in ranks]
 ALL_ADMIN_RELATED_ROLES = ALL_STAFF_RANKS + CATEGORY_ROLES
-VACATION_ROLE = "Vacation | إجازة"
-
-BASE_LEVEL_MESSAGES = 100
-LEVEL_GROWTH_FACTOR = 1.15
-LEVEL_ROLES = [f"Level {n}" for n in range(10, 80, 10)]
-LEGEND_LEVEL_ROLE = "Great Member"
-MESSAGE_COOLDOWN_SECONDS = 15
+VACATION_ROLE = "Vacation"
 
 
 def load_json(path: Path, default):
@@ -73,32 +68,13 @@ def save_json(path: Path, data):
 ratings_data = load_json(RATINGS_FILE, {})
 vacations_data = load_json(VACATIONS_FILE, {})
 attendance_data = load_json(ATTENDANCE_FILE, {})
-stats_data = load_json(STATS_FILE, {"admin_actions": 0, "say_count": 0, "messages": 0})
-economy_data = load_json(ECONOMY_FILE, {})
+stats_data = load_json(STATS_FILE, {"admin_actions": 0, "say_count": 0})
+dashboard_actions = load_json(ACTIONS_FILE, [])
 
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-def user_row(user_id: int) -> Dict:
-    row = economy_data.setdefault(
-        str(user_id),
-        {
-            "coins": 0,
-            "level": 0,
-            "xp": 0,
-            "messages": 0,
-            "last_message_ts": 0,
-        },
-    )
-    return row
-
-
-def xp_required_for_next_level(current_level: int) -> int:
-    # Level 0 -> 1 يحتاج 100 رسالة، وكل مستوى بعده أصعب 15%
-    return max(1, int(round(BASE_LEVEL_MESSAGES * (LEVEL_GROWTH_FACTOR ** current_level))))
 
 
 def find_rank_position(member: discord.Member) -> Optional[Tuple[str, int]]:
@@ -119,6 +95,117 @@ def tier_of_rank(rank_name: str) -> Optional[str]:
 
 async def get_role(guild: discord.Guild, role_name: str) -> Optional[discord.Role]:
     return discord.utils.get(guild.roles, name=role_name)
+
+
+def add_dashboard_action(action_type: str, payload: Dict):
+    dashboard_actions.append({
+        "id": int(datetime.now(timezone.utc).timestamp() * 1000) + random.randint(1, 999),
+        "type": action_type,
+        "payload": payload,
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    save_json(ACTIONS_FILE, dashboard_actions)
+
+
+async def process_dashboard_action(guild: discord.Guild, action: Dict):
+    a_type = action.get("type")
+    payload = action.get("payload", {})
+    member_id = payload.get("member_id")
+    member = guild.get_member(int(member_id)) if member_id else None
+
+    if a_type == "hire":
+        if not member:
+            raise ValueError("member not found")
+        await move_to_rank(member, "Trial Staff")
+        await ensure_category_role(member, "STAFF")
+    elif a_type == "promote":
+        if not member:
+            raise ValueError("member not found")
+        steps = max(1, int(payload.get("steps", 1)))
+        pos = find_rank_position(member)
+        if not pos:
+            raise ValueError("member is not staff")
+        tier, idx = pos
+        current_rank = RANK_TIERS[tier][idx]
+        current_global_idx = ALL_STAFF_RANKS.index(current_rank)
+        target_idx = min(current_global_idx + steps, len(ALL_STAFF_RANKS) - 1)
+        await move_to_rank(member, ALL_STAFF_RANKS[target_idx])
+    elif a_type == "demote":
+        if not member:
+            raise ValueError("member not found")
+        steps = max(1, int(payload.get("steps", 1)))
+        pos = find_rank_position(member)
+        if not pos:
+            raise ValueError("member is not staff")
+        tier, idx = pos
+        current_rank = RANK_TIERS[tier][idx]
+        current_global_idx = ALL_STAFF_RANKS.index(current_rank)
+        target_idx = max(current_global_idx - steps, 0)
+        await move_to_rank(member, ALL_STAFF_RANKS[target_idx])
+    elif a_type == "promote_tier":
+        if not member:
+            raise ValueError("member not found")
+        steps = max(1, int(payload.get("steps", 1)))
+        pos = find_rank_position(member)
+        if not pos:
+            raise ValueError("member is not staff")
+        tier, idx = pos
+        ranks = RANK_TIERS[tier]
+        target_idx = min(idx + steps, len(ranks) - 1)
+        await move_to_rank(member, ranks[target_idx])
+    elif a_type == "fire":
+        if not member:
+            raise ValueError("member not found")
+        await remove_admin_roles(member)
+    elif a_type == "vacation":
+        if not member:
+            raise ValueError("member not found")
+        hours = max(1, int(payload.get("hours", 24)))
+        old_roles = [r.name for r in member.roles if r.name in ALL_ADMIN_RELATED_ROLES]
+        await remove_admin_roles(member)
+        vacation_role = await get_role(guild, VACATION_ROLE)
+        if vacation_role:
+            await member.add_roles(vacation_role, reason="Vacation start from dashboard")
+        end_ts = (datetime.now(timezone.utc) + timedelta(hours=hours)).timestamp()
+        vacations_data[str(member.id)] = {"end": end_ts, "old_roles": old_roles}
+        save_json(VACATIONS_FILE, vacations_data)
+    else:
+        raise ValueError(f"unknown action {a_type}")
+
+
+@tasks.loop(seconds=10)
+async def dashboard_action_worker():
+    await bot.wait_until_ready()
+    if not dashboard_actions:
+        return
+
+    guild = bot.get_guild(GUILD_ID) if GUILD_ID else (bot.guilds[0] if bot.guilds else None)
+    if guild is None:
+        return
+
+    changed = False
+    for action in dashboard_actions:
+        if action.get("status") != "pending":
+            continue
+        try:
+            await process_dashboard_action(guild, action)
+            action["status"] = "done"
+            action["processed_at"] = datetime.now(timezone.utc).isoformat()
+            await log_action(guild, f"Dashboard action: {action.get('type')} | payload={action.get('payload')}")
+        except Exception as exc:
+            action["status"] = "failed"
+            action["error"] = str(exc)
+            action["processed_at"] = datetime.now(timezone.utc).isoformat()
+        changed = True
+
+    if changed:
+        # keep only last 300 actions to avoid file bloat
+        recent = dashboard_actions[-300:]
+        dashboard_actions.clear()
+        dashboard_actions.extend(recent)
+        save_json(ACTIONS_FILE, dashboard_actions)
+
 
 
 async def staff_manager_check(ctx: commands.Context) -> bool:
@@ -151,7 +238,7 @@ async def ensure_category_role(member: discord.Member, tier_name: str):
 async def move_to_rank(member: discord.Member, target_rank: str):
     guild = member.guild
 
-    # لا نحذف رتب الفئات مع الترقية/التنزيل
+    # حذف رتب المناصب فقط (وليس رتب الفئات)
     rank_roles_to_remove = [r for r in member.roles if r.name in ALL_STAFF_RANKS]
     if rank_roles_to_remove:
         await member.remove_roles(*rank_roles_to_remove, reason="Staff rank change")
@@ -160,6 +247,7 @@ async def move_to_rank(member: discord.Member, target_rank: str):
     if role:
         await member.add_roles(role, reason="Staff rank change")
 
+    # إضافة رتبة الفئة تلقائياً حسب الرتبة الجديدة
     tier_name = tier_of_rank(target_rank)
     if tier_name:
         await ensure_category_role(member, tier_name)
@@ -169,26 +257,6 @@ async def remove_admin_roles(member: discord.Member):
     roles_to_remove = [r for r in member.roles if r.name in ALL_ADMIN_RELATED_ROLES]
     if roles_to_remove:
         await member.remove_roles(*roles_to_remove, reason="Admin roles removal")
-
-
-async def apply_level_role(member: discord.Member, level: int):
-    role_names_to_manage = set(LEVEL_ROLES + [LEGEND_LEVEL_ROLE])
-    old_roles = [r for r in member.roles if r.name in role_names_to_manage]
-    if old_roles:
-        await member.remove_roles(*old_roles, reason="Level role update")
-
-    target_role_name: Optional[str] = None
-    if level >= 80:
-        target_role_name = LEGEND_LEVEL_ROLE
-    elif level >= 10:
-        bracket = min((level // 10) * 10, 70)
-        if bracket >= 10:
-            target_role_name = f"Level {bracket}"
-
-    if target_role_name:
-        role = await get_role(member.guild, target_role_name)
-        if role and role not in member.roles:
-            await member.add_roles(role, reason="Level reward role")
 
 
 @bot.event
@@ -202,45 +270,8 @@ async def on_ready():
 
     if not vacation_watcher.is_running():
         vacation_watcher.start()
-
-
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot or message.guild is None:
-        return
-
-    row = user_row(message.author.id)
-    now_ts = int(datetime.now(timezone.utc).timestamp())
-
-    # مكافحة السبام: مكافأة تفاعل كل 15 ثانية كحد أدنى
-    if now_ts - int(row.get("last_message_ts", 0)) >= MESSAGE_COOLDOWN_SECONDS:
-        gained_coins = random.randint(1, 5)
-        row["coins"] += gained_coins
-        row["messages"] += 1
-        row["xp"] += 1  # كل رسالة مؤهلة = 1 XP
-        row["last_message_ts"] = now_ts
-        stats_data["messages"] = stats_data.get("messages", 0) + 1
-
-        leveled_up = False
-        while row["xp"] >= xp_required_for_next_level(row["level"]):
-            needed = xp_required_for_next_level(row["level"])
-            row["xp"] -= needed
-            row["level"] += 1
-            leveled_up = True
-
-        save_json(ECONOMY_FILE, economy_data)
-        save_json(STATS_FILE, stats_data)
-
-        if leveled_up:
-            await apply_level_role(message.author, row["level"])
-            nxt = xp_required_for_next_level(row["level"])
-            await message.channel.send(
-                f"🎉 {message.author.mention} وصلت لفل **{row['level']}**!"
-                f" | ALR Coins: **{row['coins']}**\n"
-                f"المطلوب للمستوى القادم: **{nxt}** رسالة."
-            )
-
-    await bot.process_commands(message)
+    if not dashboard_action_worker.is_running():
+        dashboard_action_worker.start()
 
 
 @commands.check(staff_manager_check)
@@ -507,45 +538,6 @@ async def stats(interaction: discord.Interaction):
     embed.add_field(name="عدد التقييمات", value=str(all_votes), inline=False)
     embed.add_field(name="أفضل إداري", value=top_user, inline=False)
     embed.add_field(name="متوسط التقييم", value=f"{avg_global:.2f}", inline=False)
-    embed.add_field(name="رسائل التفاعل", value=str(stats_data.get("messages", 0)), inline=False)
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="profile", description="عرض مستوى وعملة ALR", guild=discord.Object(id=GUILD_ID) if GUILD_ID else None)
-@app_commands.describe(member="اختياري: عضو آخر")
-async def profile(interaction: discord.Interaction, member: Optional[discord.Member] = None):
-    target = member or interaction.user
-    row = user_row(target.id)
-    needed = xp_required_for_next_level(row["level"])
-
-    embed = discord.Embed(title=f"🏆 ملف {target.display_name}", color=discord.Color.purple())
-    embed.add_field(name="ALR Coins", value=str(row["coins"]), inline=True)
-    embed.add_field(name="Level", value=str(row["level"]), inline=True)
-    embed.add_field(name="XP", value=f"{row['xp']} / {needed}", inline=True)
-    embed.add_field(name="Qualified Messages", value=str(row["messages"]), inline=False)
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="top_alr", description="أفضل 10 في ALR Coins", guild=discord.Object(id=GUILD_ID) if GUILD_ID else None)
-async def top_alr(interaction: discord.Interaction):
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.response.send_message("❌ الأمر داخل السيرفر فقط.", ephemeral=True)
-
-    rows = []
-    for user_id, row in economy_data.items():
-        member = guild.get_member(int(user_id))
-        if member:
-            rows.append((member, row.get("coins", 0), row.get("level", 0)))
-
-    rows.sort(key=lambda x: (x[1], x[2]), reverse=True)
-    top = rows[:10]
-
-    if not top:
-        return await interaction.response.send_message("لا يوجد بيانات بعد.")
-
-    lines = [f"**{idx}.** {member.mention} — 💰 {coins} ALR | Lv.{lvl}" for idx, (member, coins, lvl) in enumerate(top, start=1)]
-    embed = discord.Embed(title="💎 Top ALR Coins", description="\n".join(lines), color=discord.Color.gold())
     await interaction.response.send_message(embed=embed)
 
 
@@ -605,8 +597,10 @@ async def love(interaction: discord.Interaction, person1: str, person2: str):
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default()
 
-    a1 = (await avatar_to_image(first.display_avatar)).resize((220, 220))
-    a2 = (await avatar_to_image(second.display_avatar)).resize((220, 220))
+    a1 = await avatar_to_image(first.display_avatar)
+    a2 = await avatar_to_image(second.display_avatar)
+    a1 = a1.resize((220, 220))
+    a2 = a2.resize((220, 220))
 
     img.paste(a1.convert("RGB"), (150, 30))
     img.paste(a2.convert("RGB"), (150, 380))
